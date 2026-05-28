@@ -10,12 +10,15 @@ mb_language('Japanese');
 mb_internal_encoding('UTF-8');
 
 // ---- 設定 ----
-const ADMIN_EMAIL   = 'pilates@studioemi.jp';
-const FROM_EMAIL    = 'noreply@studioemi.jp';
-const FROM_NAME     = 'Studio EMI';
-const SITE_URL      = 'https://studioemi.jp/';
-const THANKS_PAGE   = 'thanks.html';
-const MIN_FORM_SECS = 3; // フォーム表示〜送信が3秒未満ならbot判定
+const ADMIN_EMAIL          = 'pilates@studioemi.jp';
+const FROM_EMAIL           = 'noreply@studioemi.jp';      // 管理者宛て envelope sender
+const AUTO_REPLY_FROM_EMAIL = 'pilates@studioemi.jp';     // お客様への自動返信（キャリアメールでブロックされにくく）
+const FROM_NAME            = 'Studio EMI';
+const SITE_URL             = 'https://studioemi.jp/';
+const LINE_URL             = 'https://line.me/R/ti/p/@178bpnva';
+const THANKS_PAGE          = 'thanks.html';
+const MIN_FORM_SECS        = 1;     // 即送信（autofill 等）も許容
+const MAX_FORM_SECS        = 604800; // タブ放置7日まで許容
 
 // ---- POST以外は弾く ----
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -32,11 +35,16 @@ if (!empty($_POST['website'] ?? '')) {
 }
 
 // ---- timestamp チェック ----
+// ts が空・0 のとき（JS未実行・古い in-app browser 等）はスルー。bot判定は honeypot に任せる。
+// ts が入っているときだけ「速すぎ / 古すぎ」を判定する。
 $ts = (int)($_POST['ts'] ?? 0);
 $now = time();
-if ($ts <= 0 || ($now - $ts) < MIN_FORM_SECS || ($now - $ts) > 86400) {
-    http_response_code(400);
-    exit(render_error('フォームの送信タイミングが不正です。もう一度お試しください。'));
+if ($ts > 0) {
+    $elapsed = $now - $ts;
+    if ($elapsed < MIN_FORM_SECS || $elapsed > MAX_FORM_SECS) {
+        http_response_code(400);
+        exit(render_error('フォームの送信タイミングが不正です。お手数ですが、ページを再読み込みしてからもう一度お試しください。'));
+    }
 }
 
 // ---- 入力取得＆トリム ----
@@ -155,15 +163,17 @@ Studio EMI（スタジオEMI）
 {$site_url}
 EOT;
 
-$user_headers = "From: {$mime_from}\r\n"
+// お客様宛て自動返信は pilates@ 名義で送る（noreply@ よりキャリアメールでブロックされにくい）
+$auto_reply_mime_from = mb_encode_mimeheader(FROM_NAME) . ' <' . AUTO_REPLY_FROM_EMAIL . '>';
+$user_headers = "From: {$auto_reply_mime_from}\r\n"
               . "X-Mailer: PHP/" . PHP_VERSION;
 
-$user_ok = mb_send_mail($email_safe, $user_subject, $user_body, $user_headers, '-f' . FROM_EMAIL);
+$user_ok = mb_send_mail($email_safe, $user_subject, $user_body, $user_headers, '-f' . AUTO_REPLY_FROM_EMAIL);
 
 // ---- 結果ハンドリング ----
 if (!$admin_ok) {
     http_response_code(500);
-    exit(render_error('送信処理でエラーが発生しました。お手数ですが、LINEまたはお電話にてお問い合わせください。'));
+    exit(render_error('送信処理でエラーが発生しました。お手数ですが、下記の LINE よりお問い合わせください。'));
 }
 
 // 成功 → thanks ページへ
@@ -175,6 +185,7 @@ exit;
 function render_error(string $message): string
 {
     $msg = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+    $line_url = LINE_URL;
     return <<<HTML
 <!doctype html>
 <html lang="ja"><head>
@@ -183,16 +194,27 @@ function render_error(string $message): string
 <meta name="robots" content="noindex">
 <title>送信エラー | Studio EMI</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; background:#faf7f2; color:#333; margin:0; padding:48px 24px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; background:#faf7f2; color:#333; margin:0; padding:48px 24px; line-height:1.7; }
   .box { max-width:520px; margin:0 auto; background:#fff; padding:32px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
   h1 { font-size:1.2rem; margin:0 0 16px; color:#c00; }
-  a.btn { display:inline-block; margin-top:24px; padding:10px 24px; background:#333; color:#fff; text-decoration:none; border-radius:6px; }
+  .alt { margin-top:24px; padding:18px; background:#faf7f2; border:1px solid #e5ddd2; border-radius:8px; font-size:.9rem; }
+  .alt p { margin:0 0 10px; }
+  .btns { margin-top:24px; display:flex; gap:12px; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:10px 22px; background:#333; color:#fff; text-decoration:none; border-radius:6px; font-size:.9rem; }
+  .btn.line { background:#06C755; }
 </style>
 </head><body>
 <div class="box">
 <h1>送信エラー</h1>
 <p>{$msg}</p>
-<a class="btn" href="javascript:history.back()">戻る</a>
+<div class="alt">
+  <p><strong>うまく送信できない場合</strong></p>
+  <p>お手数をおかけしますが、LINE から直接ご連絡ください。担当者よりご案内いたします。</p>
+</div>
+<div class="btns">
+  <a class="btn" href="javascript:history.back()">戻る</a>
+  <a class="btn line" href="{$line_url}" target="_blank" rel="noopener">LINEで問い合わせ</a>
+</div>
 </div>
 </body></html>
 HTML;
